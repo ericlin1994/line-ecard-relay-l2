@@ -395,7 +395,7 @@
   setTimeout(finish, 1200);                      // 保險：1.2 秒內一定導向
 
   function send(uid){
-    if(!""){ finish(); return; }          // 沒設後端 → 只導向，不記錄
+    if(!"https://script.google.com/macros/s/AKfycbz6-2txbuJk2l3xJCWM7KoemrFPM-rpZuxvcd2A8Jk126LTu5qhBZgup7dicVsA3649/exec"){ finish(); return; }          // 沒設後端 → 只導向，不記錄
     var body = JSON.stringify({slug:slug, target:to, uid:uid||'',
                                ts:Date.now(), ua:navigator.userAgent,
                                ref:q.get('ref')||''});
@@ -403,12 +403,12 @@
     // 送出後「立刻」導向，不等回應。
     try{
       if(navigator.sendBeacon &&
-         navigator.sendBeacon("", new Blob([body], {type:'text/plain;charset=utf-8'}))){
+         navigator.sendBeacon("https://script.google.com/macros/s/AKfycbz6-2txbuJk2l3xJCWM7KoemrFPM-rpZuxvcd2A8Jk126LTu5qhBZgup7dicVsA3649/exec", new Blob([body], {type:'text/plain;charset=utf-8'}))){
         finish(); return;
       }
     }catch(e){}
     try{
-      fetch("", {
+      fetch("https://script.google.com/macros/s/AKfycbz6-2txbuJk2l3xJCWM7KoemrFPM-rpZuxvcd2A8Jk126LTu5qhBZgup7dicVsA3649/exec", {
         method: 'POST',
         headers: {'Content-Type':'text/plain;charset=utf-8'},
         body: body,
