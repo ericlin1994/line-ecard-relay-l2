@@ -25,6 +25,16 @@
  *    5. 把該網址填進 relay/build_relay.py 的 TRACK_API，然後重跑：
  *           cd ~/card-product/relay && python build_relay.py
  *
+ * ── 維運：用網址產生客戶綁定碼（不用改程式碼）──────────────────
+ *  1. 先把下方 OP_KEY 設成你自己的一串英數字，存檔並重新部署
+ *  2. 在瀏覽器開（可直接複製，換掉 <你的網址>、<OP_KEY>、客戶 slug）：
+ *       <你的網址>?gencode=tc-fez-glass&key=<OP_KEY>
+ *     回傳 {"ok":true,"code":"K7M2XQ9P","slug":"tc-fez-glass"}，把 code 給客戶
+ *  3. 查最近的綁定碼（最多 50 筆、新的在前、含是否已使用）：
+ *       <你的網址>?codes=1&key=<OP_KEY>
+ *  錯誤：disabled = OP_KEY 沒設；forbidden = key 不對；bad_slug = slug 格式不合法
+ *  （備用：編輯器改 GEN_SLUG 後執行 genCode()，見下方「產生綁定碼」）
+ *
  * ── 驗收 ───────────────────────────────────────────────────────
  *  在瀏覽器開  <你的網址>?stats=hill-cafe-demo&key=<OP_KEY>   應回傳 JSON（OP_KEY 空 = disabled）
  *  在瀏覽器開  <你的網址>                         應回傳 {"ok":true,...} 提示
@@ -75,7 +85,11 @@ function hashUid_(uid) {
   }).join('').slice(0, 12);
 }
 
-/* 維運用 ?stats= 的金鑰。空字串 = 停用（一律回 disabled）；有值要帶 &key=<OP_KEY> */
+/* 維運用密碼：請改成你自己的一串英數字（不要用範例、不要太短）。
+   設好之後，?gencode= / ?codes= / ?stats= 都要帶 &key=<這個值>。
+   留空 = 這三個維運端點全部停用（回 disabled）；
+   ?dash= 與 /bind 不受影響，客戶端照常運作。
+   改完要重新部署（部署 → 管理部署作業 → 編輯 → 新版本）才會生效。 */
 const OP_KEY = '';
 const CODES_SHEET = 'codes';   // code, slug, used, created_at, fail_count, locked
 const BINDS_SHEET = 'binds';   // code, slug, uid_hash, bound_at
@@ -142,7 +156,10 @@ function makeCode_(slug) {
 }
 
 /* ═══ 產生綁定碼（給客戶綁定看板用）═══
-   用法：
+   【建議】用網址方式，不用改程式碼（需先設好 OP_KEY）：
+     <你的網址>?gencode=<客戶slug>&key=<OP_KEY>   -> {"ok":true,"code":"K7M2XQ9P","slug":"..."}
+     <你的網址>?codes=1&key=<OP_KEY>              -> 最近 50 筆綁定碼（新的在前）
+   【備用】在編輯器執行（OP_KEY 沒設時用這個）：
      1. 把下面的 GEN_SLUG 改成客戶的 slug
      2. 在 Apps Script 編輯器上方的函式下拉選單選「genCode」
      3. 按「執行」
@@ -271,14 +288,48 @@ function doPost(e) {
   }
 }
 
+/* 最近的綁定碼清單（維運查詢用）：最多 50 筆、新的在前；不回 fail_count / locked */
+function codes_() {
+  const sh = sheetNamed_(CODES_SHEET, CODES_HEADER);
+  const last = sh.getLastRow();
+  if (last < 2) return { ok: true, codes: [] };
+  const rows = sh.getRange(2, 1, last - 1, CODES_HEADER.length).getValues();
+  const list = rows.map(function (r, i) {
+    return { code: unq_(r[0]), slug: unq_(r[1]), used: isTrue_(r[2]),
+             created_at: Number(r[3]) || 0, i: i };
+  });
+  list.sort(function (a, b) { return (b.created_at - a.created_at) || (b.i - a.i); });
+  return { ok: true, codes: list.slice(0, 50).map(function (c) {
+    return { code: c.code, slug: c.slug, used: c.used, created_at: c.created_at };
+  }) };
+}
+
+/* 維運端點 ?gencode= 用：持鎖產生，避免兩個請求同時產生相同的碼 */
+function genCodeLocked_(slug) {
+  if (typeof slug !== 'string' || !SLUG_RE.test(slug)) return { ok: false, error: 'bad_slug' };
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    return { ok: true, code: makeCode_(slug), slug: slug };
+  } catch (err) {
+    return { ok: false, error: String(err) };
+  } finally {
+    try { lock.releaseLock(); } catch (ignored) {}
+  }
+}
+
 function doGet(e) {
   const p = (e && e.parameter) || {};
   if (p.dash !== undefined) return out_(dash_(p.dash));
-  if (p.stats === undefined) {
+  const isOp = p.gencode !== undefined || p.codes !== undefined || p.stats !== undefined;
+  if (!isOp) {
     return out_({ ok: true, hint: 'POST 事件到本網址；GET ?dash=<uid> 取綁定看板統計' });
   }
+  // 三個維運端點（gencode / codes / stats）共用同一道金鑰檢查
   if (!OP_KEY) return out_({ ok: false, error: 'disabled' });
   if (p.key !== OP_KEY) return out_({ ok: false, error: 'forbidden' });
+  if (p.gencode !== undefined) return out_(genCodeLocked_(p.gencode));
+  if (p.codes !== undefined) return out_(codes_());
   return out_(stats_(p.stats));
 }
 
