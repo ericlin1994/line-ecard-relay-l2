@@ -1,0 +1,333 @@
+/**
+ * L2 追蹤後端 —— 正式版（Google Apps Script + Google 試算表）
+ *
+ * 為什麼用 Apps Script：免費、不用新帳號、不用伺服器，資料直接躺在試算表裡可視。
+ * 行為與 backend/mock_server.py 完全一致（同一個 /event、同一個 /stats 形狀）。
+ *
+ * ── 部署步驟（約 5 分鐘）：兩種方式擇一 ─────────────────────────
+ *
+ *  方式 A（電腦，最簡單）：綁定指令碼，SPREADSHEET_ID 留空
+ *    1. 開一個新的 Google 試算表，命名例如「名片追蹤 events」
+ *    2. 擴充功能 → Apps Script，把本檔全部內容貼進去，存檔
+ *       （SPREADSHEET_ID 保持空字串）
+ *
+ *  方式 B（手機瀏覽器）：獨立指令碼，必須填 SPREADSHEET_ID
+ *    1. 先開一個 Google 試算表，複製它的 ID
+ *       （網址 https://docs.google.com/spreadsheets/d/<這一段>/edit 中間那一段）
+ *    2. 用手機瀏覽器開 script.google.com，建立新專案（獨立指令碼）
+ *    3. 把本檔全部內容貼進去，並把上方 SPREADSHEET_ID 填入剛複製的 ID，存檔
+ *
+ *  兩種方式接下來都一樣：
+ *    3. 部署 → 新增部署作業 → 類型選「網頁應用程式」
+ *         • 執行身分：我
+ *         • 具有應用程式存取權的使用者：任何人
+ *    4. 複製產生的網址（https://script.google.com/macros/s/AKfy.../exec）
+ *    5. 把該網址填進 relay/build_relay.py 的 TRACK_API，然後重跑：
+ *           cd ~/card-product/relay && python build_relay.py
+ *
+ * ── 驗收 ───────────────────────────────────────────────────────
+ *  在瀏覽器開  <你的網址>?stats=hill-cafe-demo&key=<OP_KEY>   應回傳 JSON（OP_KEY 空 = disabled）
+ *  在瀏覽器開  <你的網址>                         應回傳 {"ok":true,...} 提示
+ *
+ * 隱私：只記 slug / target / uid / 時間 / UA / 來源。
+ *       不記姓名、電話、Email。uid 是 LINE 的匿名使用者識別碼。
+ *       刪除某人紀錄：在試算表篩選 uid 後刪列即可。
+ */
+
+const SHEET_NAME = 'events';
+const HEADER = ['slug', 'target', 'uid', 'ts', 'ua', 'ref'];
+const SLUG_RE = /^[a-z0-9-]{1,64}$/;
+const TZ = 'Asia/Taipei';   // 固定台北時區，與 mock_server.py 一致
+const SPREADSHEET_ID = '';   // 綁定試算表時留空；獨立指令碼請填試算表 ID
+
+/* 取得試算表：有填 ID 用 openById；留空則用綁定的 active spreadsheet */
+function getSpreadsheet_() {
+  let ss = null;
+  if (SPREADSHEET_ID) {
+    ss = SpreadsheetApp.openById(SPREADSHEET_ID);
+  } else {
+    ss = SpreadsheetApp.getActiveSpreadsheet();
+  }
+  if (!ss) {
+    throw new Error('找不到試算表：請在 SPREADSHEET_ID 填入試算表 ID，或改成從試算表開啟的綁定指令碼');
+  }
+  return ss;
+}
+
+/* 截長度並加 ' 前綴，避免 Google Sheets 公式注入 */
+function safe_(v, limit) {
+  return "'" + String(v == null ? '' : v).slice(0, limit);
+}
+
+/* 讀出時去掉上面加的前綴 ' */
+function unq_(v) {
+  const s = String(v == null ? '' : v);
+  return s.charAt(0) === "'" ? s.slice(1) : s;
+}
+
+/* uid 只存 SHA-256 前 12 碼，不存原始 LINE userId */
+function hashUid_(uid) {
+  if (!uid) return '';
+  const bytes = Utilities.computeDigest(
+    Utilities.DigestAlgorithm.SHA_256, String(uid), Utilities.Charset.UTF_8);
+  return bytes.map(function (b) {
+    return ('0' + (b & 0xff).toString(16)).slice(-2);
+  }).join('').slice(0, 12);
+}
+
+/* 維運用 ?stats= 的金鑰。空字串 = 停用（一律回 disabled）；有值要帶 &key=<OP_KEY> */
+const OP_KEY = '';
+const CODES_SHEET = 'codes';   // code, slug, used, created_at, fail_count, locked
+const BINDS_SHEET = 'binds';   // code, slug, uid_hash, bound_at
+const FAILS_SHEET = 'bind_fails';   // ts, code（只存前 2 碼 + ***）, reason
+const CODES_HEADER = ['code', 'slug', 'used', 'created_at', 'fail_count', 'locked'];
+const BINDS_HEADER = ['code', 'slug', 'uid_hash', 'bound_at'];
+const FAILS_HEADER = ['ts', 'code', 'reason'];
+
+/* 防暴力破解（與 mock_server.py 同值） */
+const CODE_TTL_DAYS = 30;                 // 綁定碼有效期
+const CODE_FAIL_MAX = 8;                  // 單一碼累積失敗達此數 -> locked
+const FAIL_WINDOW_MS = 15 * 60 * 1000;    // 全域失敗視窗
+const FAIL_MAX = 20;                      // 視窗內失敗達此數 -> /bind 回 too_many_attempts
+
+function sheetNamed_(name, header) {
+  const ss = getSpreadsheet_();
+  let sh = ss.getSheetByName(name);
+  if (!sh) {
+    sh = ss.insertSheet(name);
+    sh.appendRow(header);
+  } else if (sh.getLastColumn() < header.length) {
+    // 舊試算表補欄位（例如 codes 新增 fail_count, locked）
+    if (sh.getMaxColumns() < header.length) {
+      sh.insertColumnsAfter(sh.getMaxColumns(), header.length - sh.getMaxColumns());
+    }
+    sh.getRange(1, 1, 1, header.length).setValues([header]);
+  }
+  return sh;
+}
+
+function sheet_() { return sheetNamed_(SHEET_NAME, HEADER); }
+
+/* ── 綁定碼 ─────────────────────────────────────────────────────
+   產生：在 Apps Script 編輯器執行 makeCode_('<slug>')，從執行記錄取得碼。
+   （本機 mock 用 backend/make_code.py，寫 codes.json） */
+function makeCode_(slug) {
+  if (!SLUG_RE.test(String(slug))) throw new Error('bad slug');
+  const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';   // 無 0 O 1 I
+  const sh = sheetNamed_(CODES_SHEET, CODES_HEADER);
+  const last = sh.getLastRow();
+  const taken = {};
+  if (last >= 2) {
+    sh.getRange(2, 1, last - 1, 1).getValues().forEach(function (r) { taken[unq_(r[0])] = 1; });
+  }
+  let code = '';
+  while (!code || taken[code]) {
+    code = '';
+    for (let i = 0; i < 8; i++) code += ALPHABET.charAt(Math.floor(Math.random() * ALPHABET.length));
+  }
+  sh.appendRow([safe_(code, 8), safe_(slug, 64), false, Date.now(), 0, false]);
+  Logger.log(code);
+  return code;
+}
+
+function isTrue_(v) { return v === true || String(v).toLowerCase() === 'true'; }
+
+/* 讀 bind_fails，丟掉超過視窗的列（工作表不會無限成長），回傳仍在視窗內的時間戳 */
+function pruneFails_(sh, now) {
+  const last = sh.getLastRow();
+  if (last < 2) return [];
+  const rows = sh.getRange(2, 1, last - 1, FAILS_HEADER.length).getValues();
+  const fresh = rows.filter(function (r) { return now - Number(r[0]) < FAIL_WINDOW_MS; });
+  if (fresh.length !== rows.length) {
+    sh.getRange(2, 1, last - 1, FAILS_HEADER.length).clearContent();
+    if (fresh.length) sh.getRange(2, 1, fresh.length, FAILS_HEADER.length).setValues(fresh);
+  }
+  return fresh.map(function (r) { return Number(r[0]); });
+}
+
+/* 一次性綁定：錯誤／已用過／過期／已鎖定一律 invalid_code；
+   近 15 分鐘失敗 >= FAIL_MAX 回 too_many_attempts。呼叫端需已持有 lock。 */
+function bind_(code, uid) {
+  const h = hashUid_(uid);
+  const attempted = code;
+  code = typeof code === 'string' ? code.trim().toUpperCase() : '';
+  const now = Date.now();
+  const failSh = sheetNamed_(FAILS_SHEET, FAILS_HEADER);
+  const fails = pruneFails_(failSh, now);
+  if (fails.length >= FAIL_MAX) {
+    const oldest = Math.min.apply(null, fails);
+    return { ok: false, error: 'too_many_attempts',
+             retry_after: Math.max(1, Math.ceil((oldest + FAIL_WINDOW_MS - now) / 1000)) };
+  }
+
+  const sh = sheetNamed_(CODES_SHEET, CODES_HEADER);
+  const last = sh.getLastRow();
+  const rows = last < 2 ? [] : sh.getRange(2, 1, last - 1, CODES_HEADER.length).getValues();
+  let idx = -1;
+  for (let i = 0; i < rows.length && code; i++) {
+    if (unq_(rows[i][0]) === code) { idx = i; break; }
+  }
+
+  let reason = null;
+  if (idx < 0) reason = 'unknown';
+  else if (isTrue_(rows[idx][5])) reason = 'locked';
+  else if (isTrue_(rows[idx][2])) reason = 'used';
+  else if (now - (Number(rows[idx][3]) || 0) > CODE_TTL_DAYS * 86400000) reason = 'expired';
+  else if (!h) reason = 'no_uid';
+
+  if (reason) {
+    if (idx >= 0 && reason !== 'locked') {
+      const n = (Number(rows[idx][4]) || 0) + 1;
+      sh.getRange(idx + 2, 5).setValue(n);
+      if (n >= CODE_FAIL_MAX) sh.getRange(idx + 2, 6).setValue(true);
+    }
+    // 只記前 2 碼 + ***，紀錄本身不能變成洩漏管道
+    const masked = (typeof attempted === 'string' ? attempted.trim().toUpperCase() : '').slice(0, 2) + '***';
+    failSh.appendRow([now, safe_(masked, 5), reason]);
+    return { ok: false, error: 'invalid_code' };
+  }
+
+  const slug = unq_(rows[idx][1]);
+  sh.getRange(idx + 2, 3).setValue(true);
+  sh.getRange(idx + 2, 5).setValue(0);   // 清除失敗次數
+  sheetNamed_(BINDS_SHEET, BINDS_HEADER)
+    .appendRow([safe_(code, 8), safe_(slug, 64), h, now]);
+  return { ok: true, slug: slug };
+}
+
+/* 依 uid 查綁定；沒綁定就不回任何 slug 的資料 */
+function dash_(uid) {
+  const h = hashUid_(uid);
+  if (!h) return { ok: true, bound: false };
+  const sh = sheetNamed_(BINDS_SHEET, BINDS_HEADER);
+  const last = sh.getLastRow();
+  if (last < 2) return { ok: true, bound: false };
+  const rows = sh.getRange(2, 1, last - 1, BINDS_HEADER.length).getValues();
+  let slug = null;
+  rows.forEach(function (r) { if (String(r[2]) === h) slug = unq_(r[1]); });   // 取最後一筆
+  if (slug === null) return { ok: true, bound: false };
+  const s = stats_(slug);
+  s.bound = true;
+  return s;
+}
+
+function out_(obj) {
+  return ContentService
+    .createTextOutput(JSON.stringify(obj))
+    .setMimeType(ContentService.MimeType.JSON);
+}
+
+/* ── 收事件 ─────────────────────────────────────────────────────
+   relay 頁用 Content-Type: text/plain 送出（避開 CORS preflight），
+   所以這裡直接讀 e.postData.contents 再 JSON.parse。 */
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  try {
+    lock.waitLock(10000);
+    const d = JSON.parse((e && e.postData && e.postData.contents) || '{}');
+    // Apps Script 沒有路徑可分：?action=bind（或 body 有 code 且沒有 slug）= 綁定
+    const p = (e && e.parameter) || {};
+    if (p.action === 'bind' || (d.code !== undefined && d.slug === undefined)) {
+      return out_(bind_(d.code, d.uid));
+    }
+    if (typeof d.slug !== 'string' || !SLUG_RE.test(d.slug)) {
+      return out_({ ok: false, error: 'bad slug' });   // Apps Script 無法回 400，用 ok:false
+    }
+    sheet_().appendRow([
+      safe_(d.slug, 64), safe_(d.target, 32), hashUid_(d.uid),
+      Number(d.ts) || Date.now(), String(d.ua || '').slice(0, 300), safe_(d.ref, 200)
+    ]);
+    return out_({ ok: true });
+  } catch (err) {
+    return out_({ ok: false, error: String(err) });
+  } finally {
+    try { lock.releaseLock(); } catch (ignored) {}
+  }
+}
+
+function doGet(e) {
+  const p = (e && e.parameter) || {};
+  if (p.dash !== undefined) return out_(dash_(p.dash));
+  if (p.stats === undefined) {
+    return out_({ ok: true, hint: 'POST 事件到本網址；GET ?dash=<uid> 取綁定看板統計' });
+  }
+  if (!OP_KEY) return out_({ ok: false, error: 'disabled' });
+  if (p.key !== OP_KEY) return out_({ ok: false, error: 'forbidden' });
+  return out_(stats_(p.stats));
+}
+
+/* ── 統計：與 mock_server.py 的 stats_for() 同一套算法 ─────────── */
+function stats_(slug) {
+  const sh = sheet_();
+  const last = sh.getLastRow();
+  if (last < 2) {
+    return { ok: true, slug: slug, total: 0, visitors: 0, week_total: 0,
+             week_visitors: 0, clicks: {}, returners: 0, top_returner: 0,
+             top_hour: null, recent: [] };
+  }
+
+  const rows = sh.getRange(2, 1, last - 1, HEADER.length).getValues();
+  const ev = rows
+    .filter(function (r) { return unq_(r[0]) === String(slug); })
+    .map(function (r) {
+      return { slug: unq_(r[0]), target: unq_(r[1]), uid: r[2],
+               ts: Number(r[3]) || 0 };
+    });
+
+  if (!ev.length) {
+    return { ok: true, slug: slug, total: 0, visitors: 0, week_total: 0,
+             week_visitors: 0, clicks: {}, returners: 0, top_returner: 0,
+             top_hour: null, recent: [] };
+  }
+
+  const now = Date.now(), WEEK = 7 * 86400000;
+  const clicks = {}, perUid = {}, hours = {};
+  let weekTotal = 0;
+  const weekUids = {};
+
+  ev.forEach(function (e) {
+    if (e.target) clicks[e.target] = (clicks[e.target] || 0) + 1;
+    if (e.uid) perUid[e.uid] = (perUid[e.uid] || 0) + 1;
+    const h = Number(Utilities.formatDate(new Date(e.ts), TZ, 'H'));
+    hours[h] = (hours[h] || 0) + 1;
+    if (now - e.ts <= WEEK) {
+      weekTotal++;
+      if (e.uid) weekUids[e.uid] = 1;
+    }
+  });
+
+  const uids = Object.keys(perUid);
+  let returners = 0, topReturner = 0;
+  uids.forEach(function (u) {
+    if (perUid[u] >= 2) returners++;
+    if (perUid[u] > topReturner) topReturner = perUid[u];
+  });
+
+  let topHour = null, best = -1;
+  Object.keys(hours).forEach(function (h) {
+    // 次數多者優先；平手取較小的小時
+    if (hours[h] > best || (hours[h] === best && Number(h) < topHour)) {
+      best = hours[h]; topHour = Number(h);
+    }
+  });
+
+  return {
+    ok: true,
+    slug: slug,
+    total: ev.length,
+    visitors: uids.length,
+    week_total: weekTotal,
+    week_visitors: Object.keys(weekUids).length,
+    clicks: clicks,
+    returners: returners,
+    top_returner: topReturner,
+    top_hour: topHour,
+    recent: ev.sort(function (a, b) { return b.ts - a.ts; }).slice(0, 20)
+      .map(function (e) { return { target: e.target, ts: e.ts }; })   // 不回 uid / ua
+  };
+}
+
+/* 測試用：在編輯器直接執行這個，會印出統計 */
+function _test() {
+  Logger.log(JSON.stringify(stats_('hill-cafe-demo'), null, 2));
+}
