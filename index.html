@@ -353,7 +353,7 @@
   // 目標白名單（build 時掃描所有客戶 client.json 產生）：
   // tel: / mailto: 直接放行；其餘（含 javascript: data: 等）一律比對網域 ——
   // hostname 等於白名單項目，或以 ".項目" 結尾（evilinstagram.com 不會過）。
-  var HOSTS = ["line.me", "instagram.com", "facebook.com", "google.com", "goo.gl", "www.instagram.com", "www.facebook.com", "liff.line.me", "be.cardtaiwan.com", "robert.cardtaiwan.com", "benson.cardtaiwan.com", "dev.taskgo.com.tw", "www.waterproofs.tw", "sunny.cardtaiwan.com"];
+  var HOSTS = ["line.me", "instagram.com", "facebook.com", "google.com", "goo.gl"];
   function hostOk(dest){
     var u = new URL(dest);
     if(/^(tel|mailto):$/.test(u.protocol)) return true;
