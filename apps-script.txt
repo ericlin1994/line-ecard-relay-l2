@@ -141,6 +141,20 @@ function makeCode_(slug) {
   return code;
 }
 
+/* ═══ 產生綁定碼（給客戶綁定看板用）═══
+   用法：
+     1. 把下面的 GEN_SLUG 改成客戶的 slug
+     2. 在 Apps Script 編輯器上方的函式下拉選單選「genCode」
+     3. 按「執行」
+     4. 下方「執行紀錄」會印出 8 碼；也可以直接看試算表 codes 工作表的最後一列
+   綁定碼是一次性的、有效期 30 天。 */
+const GEN_SLUG = 'tc-fez-glass';
+function genCode() {
+  const code = makeCode_(GEN_SLUG);
+  Logger.log('綁定碼：' + code + '　（客戶 slug：' + GEN_SLUG + '）');
+  return code;
+}
+
 function isTrue_(v) { return v === true || String(v).toLowerCase() === 'true'; }
 
 /* 讀 bind_fails，丟掉超過視窗的列（工作表不會無限成長），回傳仍在視窗內的時間戳 */
@@ -275,7 +289,7 @@ function stats_(slug) {
   if (last < 2) {
     return { ok: true, slug: slug, total: 0, visitors: 0, week_total: 0,
              week_visitors: 0, clicks: {}, returners: 0, top_returner: 0,
-             top_hour: null, recent: [] };
+             top_hour: null, recent: [], visitor_list: [] };
   }
 
   const rows = sh.getRange(2, 1, last - 1, HEADER.length).getValues();
@@ -283,13 +297,13 @@ function stats_(slug) {
     .filter(function (r) { return unq_(r[0]) === String(slug); })
     .map(function (r) {
       return { slug: unq_(r[0]), target: unq_(r[1]), uid: r[2],
-               ts: Number(r[3]) || 0 };
+               ts: Number(r[3]) || 0, name: unq_(r[7]), pic: unq_(r[8]) };
     });
 
   if (!ev.length) {
     return { ok: true, slug: slug, total: 0, visitors: 0, week_total: 0,
              week_visitors: 0, clicks: {}, returners: 0, top_returner: 0,
-             top_hour: null, recent: [] };
+             top_hour: null, recent: [], visitor_list: [] };
   }
 
   const now = Date.now(), WEEK = 7 * 86400000;
@@ -335,8 +349,27 @@ function stats_(slug) {
     top_returner: topReturner,
     top_hour: topHour,
     recent: ev.sort(function (a, b) { return b.ts - a.ts; }).slice(0, 20)
-      .map(function (e) { return { target: e.target, ts: e.ts }; })   // 不回 uid / ua
+      .map(function (e) { return { target: e.target, ts: e.ts }; }),  // 不回 uid / ua
+    visitor_list: visitorList_(ev)
   };
+}
+
+/* 同一 uid 聚合成訪客清單；uid 為空者合併成一筆未具名訪客；不回 uid，最多 50 筆 */
+function visitorList_(ev) {
+  const groups = {};
+  ev.slice().sort(function (a, b) { return a.ts - b.ts; }).forEach(function (e) {
+    const k = e.uid ? String(e.uid) : '';
+    const g = groups[k] || (groups[k] = { name: '', pic: '', targets: {}, count: 0,
+                                          last_ts: e.ts, first_ts: e.ts });
+    if (e.name) g.name = e.name;
+    if (e.pic) g.pic = e.pic;
+    if (e.target) g.targets[e.target] = (g.targets[e.target] || 0) + 1;
+    g.count++;
+    g.last_ts = e.ts;
+  });
+  if (groups['']) { groups[''].name = ''; groups[''].pic = ''; }   // 未具名訪客
+  return Object.keys(groups).map(function (k) { return groups[k]; })
+    .sort(function (a, b) { return b.last_ts - a.last_ts; }).slice(0, 50);
 }
 
 /* 測試用：在編輯器直接執行這個，會印出統計 */
