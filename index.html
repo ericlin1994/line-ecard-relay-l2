@@ -423,7 +423,7 @@
     // 與原頁 initLiff 相同：不在 LINE 內就不做 liff.init，否則外部瀏覽器會跳認證頁
     var inLineApp = /Line\/[\d.]+/i.test(navigator.userAgent) || /liff\.state=/.test(location.search);
     if(!inLineApp){ send(''); return; }
-    liff.init({liffId: '2011946176-a2549LFU'}).then(function(){
+    liff.init({liffId: '2011946176-OWaDN0zD'}).then(function(){
       if(liff.isLoggedIn && liff.isLoggedIn()){
         return liff.getProfile().then(function(p){ send(p.userId); },
                                       function(){ send(''); });
@@ -477,7 +477,7 @@
   setTimeout(function(){ fail('連線逾時，請關閉後從 LINE 重新開啟。'); }, 10000);
   msg('正在開啟看板…');
   try{
-    liff.init({liffId: '2011946176-a2549LFU'}).then(function(){
+    liff.init({liffId: '2011946176-OWaDN0zD'}).then(function(){
       if(!(liff.isLoggedIn && liff.isLoggedIn())){ fail('尚未登入 LINE，請從 LINE 重新開啟。'); return; }
       return liff.getProfile().then(function(p){
         if(done) return;
@@ -518,7 +518,7 @@ window.addEventListener('unhandledrejection', e =>
    ─ 需要：LINE Login channel + LIFF app，並在 Console 開啟 shareTargetPicker
    ─ 填入 LIFF_ID 後，在 LINE 內開啟本頁即可把「7 張原生卡片」分享給好友
    ══════════════════════════════════════════════════════════ */
-const LIFF_ID = '2011946176-a2549LFU';   // 由 client.json 的 links.liff 自動寫入
+const LIFF_ID = '2011946176-OWaDN0zD';   // 由 client.json 的 links.liff 自動寫入
 let liffReady = false, flexPayload = null;
 /* 共用模式下 payload 抓不到時為 true → 直接中止分享，
    絕對不要拿「本頁自己的內容」當後備，那會送出別人的名片。 */
