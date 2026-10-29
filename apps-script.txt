@@ -29,13 +29,13 @@
  *  在瀏覽器開  <你的網址>?stats=hill-cafe-demo&key=<OP_KEY>   應回傳 JSON（OP_KEY 空 = disabled）
  *  在瀏覽器開  <你的網址>                         應回傳 {"ok":true,...} 提示
  *
- * 隱私：只記 slug / target / uid / 時間 / UA / 來源。
- *       不記姓名、電話、Email。uid 是 LINE 的匿名使用者識別碼。
+ * 隱私：記 slug / target / uid / 時間 / UA / 來源 / err（失敗原因代碼）/ name、pic（LINE 顯示名稱與頭像網址）。
+ *       不記電話、Email。uid 只存雜湊；name / pic 為 LINE 個資，請依隱私權政策處理。
  *       刪除某人紀錄：在試算表篩選 uid 後刪列即可。
  */
 
 const SHEET_NAME = 'events';
-const HEADER = ['slug', 'target', 'uid', 'ts', 'ua', 'ref'];
+const HEADER = ['slug', 'target', 'uid', 'ts', 'ua', 'ref', 'err', 'name', 'pic'];
 const SLUG_RE = /^[a-z0-9-]{1,64}$/;
 const TZ = 'Asia/Taipei';   // 固定台北時區，與 mock_server.py 一致
 const SPREADSHEET_ID = '';   // 綁定試算表時留空；獨立指令碼請填試算表 ID
@@ -106,7 +106,18 @@ function sheetNamed_(name, header) {
   return sh;
 }
 
-function sheet_() { return sheetNamed_(SHEET_NAME, HEADER); }
+/* events 工作表：舊表只有前 6 欄時，只在表頭「補上缺的欄位」，不動既有資料列 */
+function sheet_() {
+  const sh = sheetNamed_(SHEET_NAME, HEADER);
+  const have = sh.getLastColumn();
+  if (have < HEADER.length) {
+    if (sh.getMaxColumns() < HEADER.length) {
+      sh.insertColumnsAfter(sh.getMaxColumns(), HEADER.length - sh.getMaxColumns());
+    }
+    sh.getRange(1, have + 1, 1, HEADER.length - have).setValues([HEADER.slice(have)]);
+  }
+  return sh;
+}
 
 /* ── 綁定碼 ─────────────────────────────────────────────────────
    產生：在 Apps Script 編輯器執行 makeCode_('<slug>')，從執行記錄取得碼。
@@ -235,7 +246,8 @@ function doPost(e) {
     }
     sheet_().appendRow([
       safe_(d.slug, 64), safe_(d.target, 32), hashUid_(d.uid),
-      Number(d.ts) || Date.now(), String(d.ua || '').slice(0, 300), safe_(d.ref, 200)
+      Number(d.ts) || Date.now(), String(d.ua || '').slice(0, 300), safe_(d.ref, 200),
+      safe_(d.err, 200), safe_(d.name, 100), safe_(d.pic, 300)
     ]);
     return out_({ ok: true });
   } catch (err) {

@@ -353,7 +353,7 @@
   // 目標白名單（build 時掃描所有客戶 client.json 產生）：
   // tel: / mailto: 直接放行；其餘（含 javascript: data: 等）一律比對網域 ——
   // hostname 等於白名單項目，或以 ".項目" 結尾（evilinstagram.com 不會過）。
-  var HOSTS = ["line.me", "instagram.com", "facebook.com", "google.com", "goo.gl"];
+  var HOSTS = ["line.me", "instagram.com", "facebook.com", "google.com", "goo.gl", "www.instagram.com", "www.facebook.com", "liff.line.me", "benson.cardtaiwan.com"];
   function hostOk(dest){
     var u = new URL(dest);
     if(/^(tel|mailto):$/.test(u.protocol)) return true;
@@ -394,11 +394,23 @@
   }
   setTimeout(finish, 1200);                      // 保險：1.2 秒內一定導向
 
-  function send(uid){
+  // 錯誤物件 → 短字串（優先 code，其次 message），截到 200 字元
+  function errStr(e){
+    try{ return String((e && (e.code || e.message)) || e || '').slice(0, 200); }
+    catch(x){ return ''; }
+  }
+
+  // why = 「為什麼沒有 uid」的短代碼；正常拿到 uid 時為空字串。
+  // name / pic 只在 getProfile 成功時才有，其餘情況一律空字串。
+  function send(uid, why, prof){
     if(!"https://script.google.com/macros/s/AKfycbz6-2txbuJk2l3xJCWM7KoemrFPM-rpZuxvcd2A8Jk126LTu5qhBZgup7dicVsA3649/exec"){ finish(); return; }          // 沒設後端 → 只導向，不記錄
+    prof = prof || {};
     var body = JSON.stringify({slug:slug, target:to, uid:uid||'',
                                ts:Date.now(), ua:navigator.userAgent,
-                               ref:q.get('ref')||''});
+                               ref:q.get('ref')||'',
+                               err:why||'',
+                               name:String(prof.displayName||'').slice(0, 100),
+                               pic:String(prof.pictureUrl||'').slice(0, 300)});
     // 用 text/plain 避開 CORS preflight（Apps Script 不處理 OPTIONS）。
     // 送出後「立刻」導向，不等回應。
     try{
@@ -419,18 +431,18 @@
   }
 
   try{
-    if(typeof liff === 'undefined'){ send(''); return; }
+    if(typeof liff === 'undefined'){ send('', 'no_liff'); return; }
     // 與原頁 initLiff 相同：不在 LINE 內就不做 liff.init，否則外部瀏覽器會跳認證頁
     var inLineApp = /Line\/[\d.]+/i.test(navigator.userAgent) || /liff\.state=/.test(location.search);
-    if(!inLineApp){ send(''); return; }
+    if(!inLineApp){ send('', 'not_in_line'); return; }
     liff.init({liffId: '2011946176-OWaDN0zD'}).then(function(){
       if(liff.isLoggedIn && liff.isLoggedIn()){
-        return liff.getProfile().then(function(p){ send(p.userId); },
-                                      function(){ send(''); });
+        return liff.getProfile().then(function(p){ send(p.userId, '', p); },
+                                      function(e){ send('', 'profile_failed:' + errStr(e)); });
       }
-      send('');
-    }, function(){ send(''); });
-  }catch(e){ send(''); }
+      send('', 'not_logged_in');
+    }, function(e){ send('', 'init_failed:' + errStr(e)); });
+  }catch(e){ send('', 'exception:' + errStr(e)); }
 })();
 </script>
 <script>
