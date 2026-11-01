@@ -464,7 +464,7 @@
   }catch(e){ return; }
   if(q.get('dash') !== '1') return;              // 不是看板模式 → 交回原本邏輯
 
-  var DASH_URL = "https://ericlin1994.github.io/line-ecard-dashboard/";
+  var DASH_URL = "";
   function msg(t){
     function put(){
       var n = document.getElementById('dashMsg');
@@ -860,6 +860,29 @@ function rebindLinks(host, links){
   return n;
 }
 
+
+function trackShareEvent(){
+  try{
+    var TRACK_API = "https://script.google.com/macros/s/AKfycbz6-2txbuJk2l3xJCWM7KoemrFPM-rpZuxvcd2A8Jk126LTu5qhBZgup7dicVsA3649/exec";
+    if(!TRACK_API) return;
+    var slug = getParam('c');
+    if(!slug) return;
+    function post(uid){
+      try{
+        var body = JSON.stringify({slug:slug, target:'share', uid:uid||'',
+                                   ts:Date.now(), ua:navigator.userAgent, ref:'share'});
+        try{
+          if(navigator.sendBeacon &&
+             navigator.sendBeacon(TRACK_API, new Blob([body], {type:'text/plain;charset=utf-8'}))) return;
+        }catch(e){}
+        fetch(TRACK_API, {method:'POST', headers:{'Content-Type':'text/plain;charset=utf-8'},
+                          body:body, keepalive:true}).catch(function(){});
+      }catch(e){}
+    }
+    liff.getProfile().then(function(p){ post(p && p.userId); }, function(){ post(''); });
+  }catch(e){}
+}
+
 async function shareCard(){
   diag('👆 分享按鈕被按下（' + new Date().toLocaleTimeString() + '）');
   const tip = document.getElementById('tipText');
@@ -900,6 +923,7 @@ async function shareCard(){
       diag('本次送出類型：' + (typeof label2 !== 'undefined' ? label2 : label));
       try{
         const res = await liff.shareTargetPicker(msg, { isMultiple: true });
+        try{ if(res && res.isShared === true) trackShareEvent(); }catch(e){}
         if(res){ diag('shareTargetPicker 回傳成功，卡片已送出'); tip.textContent = '✅ 已送出，謝謝你幫忙分享！'; }
         else   { diag('使用者取消（回傳 null），沒有送出'); }
         // 分享流程頁只是用來取得 session 的中轉頁，用完就關掉（送出／取消都要）
