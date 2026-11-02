@@ -383,14 +383,27 @@
   var done = false;
   function finish(){
     if(done) return; done = true;
-    if(!isWeb) restore();                        // tel:/mailto: 不會卸載頁面，先還原才不會留白頁
-    location.replace(dest);
     if(!isWeb){
+      restore();                                 // tel:/mailto: 不會卸載頁面，先還原才不會留白頁
+      location.replace(dest);
       setTimeout(function(){
         restore();
         try{ if(window.liff && liff.isInClient && liff.isInClient()) liff.closeWindow(); }catch(e){}
       }, 800);
+      return;
     }
+    var h = '';
+    try{ h = new URL(dest).hostname.toLowerCase(); }catch(e){}
+    var isLiff = (h === 'liff.line.me' || /\.liff\.line\.me$/.test(h));
+    var isLine = (h === 'line.me' || /\.line\.me$/.test(h));
+    var canOpen = false;
+    try{ canOpen = !!(window.liff && liff.isInClient && liff.isInClient() && liff.openWindow); }catch(e){}
+    try{
+      if(canOpen && isLiff){ location.replace(dest); return; }                  // LIFF→LIFF：同視窗，不跳提示
+      if(canOpen && isLine){ liff.openWindow({url:dest, external:false}); return; } // 留在 LINE 內開（新視窗）
+      if(canOpen){ liff.openWindow({url:dest, external:true}); return; }        // 外部網站 → 外部瀏覽器（新視窗）
+    }catch(e){}
+    location.replace(dest);                                                     // 非 LINE 環境／失敗 → 照舊
   }
   setTimeout(finish, 1200);                      // 保險：1.2 秒內一定導向
 
