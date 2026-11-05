@@ -321,6 +321,7 @@ function genCodeLocked_(slug) {
 function doGet(e) {
   const p = (e && e.parameter) || {};
   if (p.dash !== undefined) return out_(dash_(p.dash));
+  if (p.views !== undefined) return out_(views_(p.views));
   const isOp = p.gencode !== undefined || p.codes !== undefined || p.stats !== undefined;
   if (!isOp) {
     return out_({ ok: true, hint: 'POST 事件到本網址；GET ?dash=<uid> 取綁定看板統計' });
@@ -333,6 +334,20 @@ function doGet(e) {
   return out_(stats_(p.stats));
 }
 
+/* 名片頁瀏覽數：公開唯讀，只回累計次數，不含任何個人資料 */
+function views_(slug) {
+  if (typeof slug !== 'string' || !SLUG_RE.test(slug)) return { ok: false, error: 'bad_slug' };
+  const sh = sheet_();
+  const last = sh.getLastRow();
+  if (last < 2) return { ok: true, slug: slug, views: 0 };
+  const col = sh.getRange(2, 1, last - 1, 2).getValues();
+  let n = 0;
+  for (let i = 0; i < col.length; i++) {
+    if (unq_(col[i][0]) === slug && unq_(col[i][1]) === 'view') n++;
+  }
+  return { ok: true, slug: slug, views: n };
+}
+
 /* ── 統計：與 mock_server.py 的 stats_for() 同一套算法 ─────────── */
 function stats_(slug) {
   const sh = sheet_();
@@ -340,21 +355,26 @@ function stats_(slug) {
   if (last < 2) {
     return { ok: true, slug: slug, total: 0, visitors: 0, week_total: 0,
              week_visitors: 0, clicks: {}, returners: 0, top_returner: 0,
-             top_hour: null, recent: [], visitor_list: [] };
+             top_hour: null, recent: [], visitor_list: [], views: 0 };
   }
 
   const rows = sh.getRange(2, 1, last - 1, HEADER.length).getValues();
+  // view = 頁面開啟，不是點擊：不進 total / clicks / visitors 等，只單獨計入 views
+  const views = rows.filter(function (r) {
+    return unq_(r[0]) === String(slug) && unq_(r[1]) === 'view';
+  }).length;
   const ev = rows
     .filter(function (r) { return unq_(r[0]) === String(slug); })
     .map(function (r) {
       return { slug: unq_(r[0]), target: unq_(r[1]), uid: r[2],
                ts: Number(r[3]) || 0, name: unq_(r[7]), pic: unq_(r[8]) };
-    });
+    })
+    .filter(function (e) { return e.target !== 'view'; });
 
   if (!ev.length) {
     return { ok: true, slug: slug, total: 0, visitors: 0, week_total: 0,
              week_visitors: 0, clicks: {}, returners: 0, top_returner: 0,
-             top_hour: null, recent: [], visitor_list: [] };
+             top_hour: null, recent: [], visitor_list: [], views: views };
   }
 
   const now = Date.now(), WEEK = 7 * 86400000;
@@ -401,7 +421,8 @@ function stats_(slug) {
     top_hour: topHour,
     recent: ev.sort(function (a, b) { return b.ts - a.ts; }).slice(0, 20)
       .map(function (e) { return { target: e.target, ts: e.ts }; }),  // 不回 uid / ua
-    visitor_list: visitorList_(ev)
+    visitor_list: visitorList_(ev),
+    views: views
   };
 }
 
