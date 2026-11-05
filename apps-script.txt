@@ -322,7 +322,8 @@ function doGet(e) {
   const p = (e && e.parameter) || {};
   if (p.dash !== undefined) return out_(dash_(p.dash));
   if (p.views !== undefined) return out_(views_(p.views));
-  const isOp = p.gencode !== undefined || p.codes !== undefined || p.stats !== undefined;
+  const isOp = p.gencode !== undefined || p.codes !== undefined || p.stats !== undefined
+    || p.slugs !== undefined;
   if (!isOp) {
     return out_({ ok: true, hint: 'POST 事件到本網址；GET ?dash=<uid> 取綁定看板統計' });
   }
@@ -331,7 +332,29 @@ function doGet(e) {
   if (p.key !== OP_KEY) return out_({ ok: false, error: 'forbidden' });
   if (p.gencode !== undefined) return out_(genCodeLocked_(p.gencode));
   if (p.codes !== undefined) return out_(codes_());
+  if (p.slugs !== undefined) return out_(slugs_());
   return out_(stats_(p.stats));
+}
+
+/* 維運：列出所有送過事件的 slug（營運總覽自動發現新客戶用） */
+function slugs_() {
+  const sh = sheet_();
+  const last = sh.getLastRow();
+  if (last < 2) return { ok: true, slugs: [] };
+  const rows = sh.getRange(2, 1, last - 1, 4).getValues();   // slug, target, uid, ts
+  const m = {};
+  for (let i = 0; i < rows.length; i++) {
+    const s = unq_(rows[i][0]);
+    if (!s) continue;
+    const o = m[s] || (m[s] = { slug: s, events: 0, views: 0, last_ts: 0 });
+    o.events++;
+    if (unq_(rows[i][1]) === 'view') o.views++;
+    const t = Number(rows[i][3]) || 0;
+    if (t > o.last_ts) o.last_ts = t;
+  }
+  const list = Object.keys(m).map(function (k) { return m[k]; })
+    .sort(function (a, b) { return b.last_ts - a.last_ts; }).slice(0, 200);
+  return { ok: true, slugs: list };
 }
 
 /* 名片頁瀏覽數：公開唯讀，只回累計次數，不含任何個人資料 */
