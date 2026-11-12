@@ -353,7 +353,7 @@
   // 目標白名單（build 時掃描所有客戶 client.json 產生）：
   // tel: / mailto: 直接放行；其餘（含 javascript: data: 等）一律比對網域 ——
   // hostname 等於白名單項目，或以 ".項目" 結尾（evilinstagram.com 不會過）。
-  var HOSTS = ["line.me", "instagram.com", "facebook.com", "google.com", "goo.gl", "www.instagram.com", "www.facebook.com", "www.movenpick.com.tw", "liff.line.me", "movenpick.cardtaiwan.com", "benson.cardtaiwan.com", "chunmei.cardtaiwan.com", "movenpick.com.tw", "lin.ee", "reurl.cc", "www.fezglass.com"];
+  var HOSTS = ["line.me", "instagram.com", "facebook.com", "google.com", "goo.gl", "www.instagram.com", "www.facebook.com", "www.movenpick.com.tw", "liff.line.me", "movenpick.cardtaiwan.com", "benson.cardtaiwan.com", "chunmei.cardtaiwan.com", "www.fezglass.com", "lin.ee", "reurl.cc", "movenpick.com.tw"];
   function hostOk(dest){
     var u = new URL(dest);
     if(/^(tel|mailto):$/.test(u.protocol)) return true;
@@ -400,8 +400,12 @@
     try{ canOpen = !!(window.liff && liff.isInClient && liff.isInClient() && liff.openWindow); }catch(e){}
     try{
       if(canOpen && isLiff){ location.replace(dest); return; }                  // LIFF→LIFF：同視窗，不跳提示
-      if(canOpen && isLine){ liff.openWindow({url:dest, external:false}); return; } // 留在 LINE 內開（新視窗）
-      if(canOpen){ liff.openWindow({url:dest, external:true}); return; }        // 外部網站 → 外部瀏覽器（新視窗）
+      // openWindow 的 external（LIFF API reference）：true＝外部瀏覽器（LINE 15.20.0 起，支援
+      // Universal Link 的網址會直接切到對應 App，例如 Instagram → 使用者感受「跑掉了」）；
+      // false＝LINE 內建瀏覽器。L1 按鈕直連時就是內建瀏覽器，所以外部網站一律用 false 維持一致。
+      // openWindow 不會卸載本頁，必須 restore()：否則使用者回到 LINE 會看到 hidden 造成的空白頁。
+      if(canOpen && isLine){ liff.openWindow({url:dest, external:false}); restore(); return; } // 留在 LINE 內開（新視窗）
+      if(canOpen){ liff.openWindow({url:dest, external:false}); restore(); return; }        // 外部網站 → LINE 內建瀏覽器（新視窗）
     }catch(e){}
     location.replace(dest);                                                     // 非 LINE 環境／失敗 → 照舊
   }
@@ -477,7 +481,7 @@
   }catch(e){ return; }
   if(q.get('dash') !== '1') return;              // 不是看板模式 → 交回原本邏輯
 
-  var DASH_URL = "https://ericlin1994.github.io/line-ecard-dashboard/";
+  var DASH_URL = "";
   function msg(t){
     function put(){
       var n = document.getElementById('dashMsg');
