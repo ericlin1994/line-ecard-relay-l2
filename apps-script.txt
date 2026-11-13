@@ -32,6 +32,10 @@
  *     回傳 {"ok":true,"code":"K7M2XQ9P","slug":"tc-fez-glass"}，把 code 給客戶
  *  3. 查最近的綁定碼（最多 50 筆、新的在前、含是否已使用）：
  *       <你的網址>?codes=1&key=<OP_KEY>
+ *  4. 查未具名點擊的原因分佈（uid 抓不到時的原因代碼）：
+ *       <你的網址>?errs=<slug>&key=<OP_KEY>
+ *     回傳 {"ok":true,"slug":"...","total":48,"named":25,"unnamed":23,"reasons":{"init_failed":20,"not_in_line":3}}
+ *     reasons 的 key：(無代碼)＝網站端自己送的事件（不是故障）、not_in_line、not_logged_in、init_failed、profile_failed、no_liff、exception
  *  錯誤：disabled = OP_KEY 沒設；forbidden = key 不對；bad_slug = slug 格式不合法
  *  （備用：編輯器改 GEN_SLUG 後執行 genCode()，見下方「產生綁定碼」）
  *
@@ -87,7 +91,7 @@ function hashUid_(uid) {
 
 /* 維運用密碼：請改成你自己的一串英數字（不要用範例、不要太短）。
    設好之後，?gencode= / ?codes= / ?stats= 都要帶 &key=<這個值>。
-   留空 = 這三個維運端點全部停用（回 disabled）；
+   留空 = 這四個維運端點全部停用（回 disabled）；
    ?dash= 與 /bind 不受影響，客戶端照常運作。
    改完要重新部署（部署 → 管理部署作業 → 編輯 → 新版本）才會生效。 */
 const OP_KEY = '';
@@ -323,16 +327,17 @@ function doGet(e) {
   if (p.dash !== undefined) return out_(dash_(p.dash));
   if (p.views !== undefined) return out_(views_(p.views));
   const isOp = p.gencode !== undefined || p.codes !== undefined || p.stats !== undefined
-    || p.slugs !== undefined;
+    || p.slugs !== undefined || p.errs !== undefined;
   if (!isOp) {
     return out_({ ok: true, hint: 'POST 事件到本網址；GET ?dash=<uid> 取綁定看板統計' });
   }
-  // 三個維運端點（gencode / codes / stats）共用同一道金鑰檢查
+  // 四個維運端點（gencode / codes / stats / errs）共用同一道金鑰檢查
   if (!OP_KEY) return out_({ ok: false, error: 'disabled' });
   if (p.key !== OP_KEY) return out_({ ok: false, error: 'forbidden' });
   if (p.gencode !== undefined) return out_(genCodeLocked_(p.gencode));
   if (p.codes !== undefined) return out_(codes_());
   if (p.slugs !== undefined) return out_(slugs_());
+  if (p.errs !== undefined) return out_(errs_(p.errs));
   return out_(stats_(p.stats));
 }
 
@@ -447,6 +452,28 @@ function stats_(slug) {
     visitor_list: visitorList_(ev),
     views: views
   };
+}
+
+/* 未具名點擊的原因統計：?errs=<slug>&key=<OP_KEY>
+   uid 為空的事件＝沒抓到 LINE 身分；err 欄記下原因代碼。
+   err 為空字串＝網站端（一頁式網站）自己送的事件，本來就沒有身分，不是故障。 */
+function errs_(slug) {
+  const sh = sheet_();
+  const last = sh.getLastRow();
+  if (last < 2) return { ok: true, slug: slug, total: 0, named: 0, unnamed: 0, reasons: {} };
+  const rows = sh.getRange(2, 1, last - 1, HEADER.length).getValues();
+  const reasons = {};
+  let total = 0, named = 0, unnamed = 0;
+  for (let i = 0; i < rows.length; i++) {
+    if (unq_(rows[i][0]) !== String(slug)) continue;
+    if (unq_(rows[i][1]) === 'view') continue;      // view = 頁面開啟，不是點擊
+    total++;
+    if (rows[i][2]) { named++; continue; }          // 有 uid
+    unnamed++;
+    const code = String(unq_(rows[i][6]) || '').split(':')[0] || '(無代碼)';
+    reasons[code] = (reasons[code] || 0) + 1;
+  }
+  return { ok: true, slug: slug, total: total, named: named, unnamed: unnamed, reasons: reasons };
 }
 
 /* 同一 uid 聚合成訪客清單；uid 為空者合併成一筆未具名訪客；不回 uid，最多 50 筆 */
