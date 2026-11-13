@@ -380,14 +380,37 @@
   var root = document.documentElement;
   root.style.visibility = 'hidden';              // 追蹤模式不顯示中繼頁內容
   function restore(){ root.style.visibility = ''; }
+
+  // 中繼頁只是中轉，不該被使用者看見：目標（新視窗或撥號）結束、使用者回到本頁時，把中繼頁自己關掉。
+  // 必須確認真的發生過 hidden → visible 才呼叫 —— liff.closeWindow() 沒有指定視窗的參數、關的是最上層
+  // 那個，亂呼叫會把剛開好的目標頁關掉（實機踩過：延遲呼叫把目標頁關掉）。
+  // 3 秒 restore 是保險：萬一收不到事件，最差只是回到舊行為（看見中繼頁），不會留下白頁。
+  var wentHidden = false, closing = false;
+  function closeWhenUserReturns(){
+    document.addEventListener('visibilitychange', function(){
+      if(document.visibilityState === 'hidden'){ wentHidden = true; return; }
+      if(document.visibilityState !== 'visible' || !wentHidden) return;
+      wentHidden = false;
+      if(closing) return; closing = true;
+      try{ if(window.liff && liff.isInClient && liff.isInClient()) liff.closeWindow(); }catch(e){}
+      setTimeout(restore, 700);                  // 關不掉才會跑到這裡：至少不留白頁
+    });
+    setTimeout(restore, 3000);                   // 保險：收不到事件時回到舊行為，不留白頁
+  }
+
   var done = false;
   function finish(){
     if(done) return; done = true;
     if(!isWeb){
-      restore();                                 // tel:/mailto: 不會卸載頁面，先還原才不會留白頁
+      // tel:/mailto: 不會卸載本頁 → 中繼頁會留在使用者眼前（實機回報：撥完電話看到中繼頁）。
+      // 這條沒有「新視窗」可言，所以兩個都做：照舊延遲呼叫 closeWindow（沒有別的視窗可誤關），
+      // 再加上跟外部網站同一套的「使用者回來才關」。
+      var inLine = false;
+      try{ inLine = !!(window.liff && liff.isInClient && liff.isInClient()); }catch(e){}
       location.replace(dest);
+      if(!inLine){ restore(); return; }          // 非 LINE 環境：沒有 closeWindow 可言，直接還原
+      closeWhenUserReturns();
       setTimeout(function(){
-        restore();
         try{ if(window.liff && liff.isInClient && liff.isInClient()) liff.closeWindow(); }catch(e){}
       }, 800);
       return;
@@ -404,26 +427,10 @@
       // openWindow(external:false) 開在 LINE 內建瀏覽器的新視窗 —— 代價是中繼頁會留在新視窗「後面」。
       // openWindow 的 external：true＝外部瀏覽器（LINE 15.20.0 起支援 Universal Link 的網址會直接
       // 切到對應 App，例如 Instagram → 使用者感受「跑掉了」），不採用。
-      // 【怎麼讓中繼頁不被看見】openWindow 不會卸載本頁，所以：
-      //   1) 中繼頁保持 hidden：使用者在新視窗上看不到它。
-      //   2) 等它「先被藏起來、之後又變成可見」＝使用者關掉目標頁回來了，才呼叫 liff.closeWindow()
-      //      把中繼頁自己關掉，使用者回到聊天室。
-      //      必須確認真的發生過 hidden→visible 才呼叫：closeWindow 沒有指定視窗的參數、關的是最上層
-      //      那個，亂呼叫會把剛開好的目標頁關掉（實測延遲呼叫就是把目標頁關掉）。
-      //   3) 保險：3 秒後無條件 restore()。萬一收不到 visibilitychange，最差也只是回到舊行為
-      //      （關掉目標頁會看到中繼頁），不會留下白頁。
+      // 【怎麼讓中繼頁不被看見】見上面的 closeWhenUserReturns()：中繼頁保持 hidden，等使用者回來才關掉。
       if(canOpen){
         liff.openWindow({url:dest, external:false});
-        var wentHidden = false, closed = false;
-        document.addEventListener('visibilitychange', function(){
-          if(document.visibilityState === 'hidden'){ wentHidden = true; return; }
-          if(document.visibilityState !== 'visible' || !wentHidden) return;
-          wentHidden = false;
-          if(closed) return; closed = true;
-          try{ if(window.liff && liff.isInClient && liff.isInClient()) liff.closeWindow(); }catch(e){}
-          setTimeout(restore, 700);              // 關不掉才會跑到這裡：至少不留白頁
-        });
-        setTimeout(restore, 3000);               // 保險：收不到事件時回到舊行為，不留白頁
+        closeWhenUserReturns();
         return;
       }
     }catch(e){}
