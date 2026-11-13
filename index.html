@@ -395,24 +395,37 @@
     var h = '';
     try{ h = new URL(dest).hostname.toLowerCase(); }catch(e){}
     var isLiff = (h === 'liff.line.me' || /\.liff\.line\.me$/.test(h));
-    var isLine = (h === 'line.me' || /\.line\.me$/.test(h));
     var canOpen = false;
     try{ canOpen = !!(window.liff && liff.isInClient && liff.isInClient() && liff.openWindow); }catch(e){}
     try{
       if(canOpen && isLiff){ location.replace(dest); return; }                  // LIFF→LIFF：同視窗，不跳提示
-      // openWindow 的 external（LIFF API reference）：true＝外部瀏覽器（LINE 15.20.0 起，支援
-      // Universal Link 的網址會直接切到對應 App，例如 Instagram → 使用者感受「跑掉了」）；
-      // false＝LINE 內建瀏覽器。L1 按鈕直連時就是內建瀏覽器，所以外部網站一律用 false 維持一致。
-      // openWindow 不會卸載本頁 → 中繼頁會留在目標頁「後面」，使用者一關掉目標頁就會看見中繼頁。
-      // 所以開完目標頁要把中繼頁自己關掉（liff.closeWindow）：使用者關掉目標頁時回到聊天室。
-      // restore() 保留在 closeWindow 之前當保險：萬一關不掉，至少不會留下 hidden 造成的空白頁。
-      function closeRelaySoon(){
-        setTimeout(function(){
+      // 【為什麼不用同視窗導向】LINE 官方文件：從 LIFF 瀏覽器「同視窗」開啟非 LIFF 的外部網站，
+      // LINE 會跳一個「這是外部頁面」確認彈窗（開在不同視窗才不會）。所以外部網站一律用
+      // openWindow(external:false) 開在 LINE 內建瀏覽器的新視窗 —— 代價是中繼頁會留在新視窗「後面」。
+      // openWindow 的 external：true＝外部瀏覽器（LINE 15.20.0 起支援 Universal Link 的網址會直接
+      // 切到對應 App，例如 Instagram → 使用者感受「跑掉了」），不採用。
+      // 【怎麼讓中繼頁不被看見】openWindow 不會卸載本頁，所以：
+      //   1) 中繼頁保持 hidden：使用者在新視窗上看不到它。
+      //   2) 等它「先被藏起來、之後又變成可見」＝使用者關掉目標頁回來了，才呼叫 liff.closeWindow()
+      //      把中繼頁自己關掉，使用者回到聊天室。
+      //      必須確認真的發生過 hidden→visible 才呼叫：closeWindow 沒有指定視窗的參數、關的是最上層
+      //      那個，亂呼叫會把剛開好的目標頁關掉（實測延遲呼叫就是把目標頁關掉）。
+      //   3) 保險：3 秒後無條件 restore()。萬一收不到 visibilitychange，最差也只是回到舊行為
+      //      （關掉目標頁會看到中繼頁），不會留下白頁。
+      if(canOpen){
+        liff.openWindow({url:dest, external:false});
+        var wentHidden = false, closed = false;
+        document.addEventListener('visibilitychange', function(){
+          if(document.visibilityState === 'hidden'){ wentHidden = true; return; }
+          if(document.visibilityState !== 'visible' || !wentHidden) return;
+          wentHidden = false;
+          if(closed) return; closed = true;
           try{ if(window.liff && liff.isInClient && liff.isInClient()) liff.closeWindow(); }catch(e){}
-        }, 900);
+          setTimeout(restore, 700);              // 關不掉才會跑到這裡：至少不留白頁
+        });
+        setTimeout(restore, 3000);               // 保險：收不到事件時回到舊行為，不留白頁
+        return;
       }
-      if(canOpen && isLine){ liff.openWindow({url:dest, external:false}); restore(); closeRelaySoon(); return; } // 留在 LINE 內開（新視窗）
-      if(canOpen){ liff.openWindow({url:dest, external:false}); restore(); closeRelaySoon(); return; }        // 外部網站 → LINE 內建瀏覽器（新視窗）
     }catch(e){}
     location.replace(dest);                                                     // 非 LINE 環境／失敗 → 照舊
   }
