@@ -403,9 +403,16 @@
       // openWindow 的 external（LIFF API reference）：true＝外部瀏覽器（LINE 15.20.0 起，支援
       // Universal Link 的網址會直接切到對應 App，例如 Instagram → 使用者感受「跑掉了」）；
       // false＝LINE 內建瀏覽器。L1 按鈕直連時就是內建瀏覽器，所以外部網站一律用 false 維持一致。
-      // openWindow 不會卸載本頁，必須 restore()：否則使用者回到 LINE 會看到 hidden 造成的空白頁。
-      if(canOpen && isLine){ liff.openWindow({url:dest, external:false}); restore(); return; } // 留在 LINE 內開（新視窗）
-      if(canOpen){ liff.openWindow({url:dest, external:false}); restore(); return; }        // 外部網站 → LINE 內建瀏覽器（新視窗）
+      // openWindow 不會卸載本頁 → 中繼頁會留在目標頁「後面」，使用者一關掉目標頁就會看見中繼頁。
+      // 所以開完目標頁要把中繼頁自己關掉（liff.closeWindow）：使用者關掉目標頁時回到聊天室。
+      // restore() 保留在 closeWindow 之前當保險：萬一關不掉，至少不會留下 hidden 造成的空白頁。
+      function closeRelaySoon(){
+        setTimeout(function(){
+          try{ if(window.liff && liff.isInClient && liff.isInClient()) liff.closeWindow(); }catch(e){}
+        }, 900);
+      }
+      if(canOpen && isLine){ liff.openWindow({url:dest, external:false}); restore(); closeRelaySoon(); return; } // 留在 LINE 內開（新視窗）
+      if(canOpen){ liff.openWindow({url:dest, external:false}); restore(); closeRelaySoon(); return; }        // 外部網站 → LINE 內建瀏覽器（新視窗）
     }catch(e){}
     location.replace(dest);                                                     // 非 LINE 環境／失敗 → 照舊
   }
