@@ -353,7 +353,7 @@
   // 目標白名單（build 時掃描所有客戶 client.json 產生）：
   // tel: / mailto: 直接放行；其餘（含 javascript: data: 等）一律比對網域 ——
   // hostname 等於白名單項目，或以 ".項目" 結尾（evilinstagram.com 不會過）。
-  var HOSTS = ["line.me", "instagram.com", "facebook.com", "google.com", "goo.gl", "www.instagram.com", "www.facebook.com", "www.movenpick.com.tw", "liff.line.me", "movenpick.cardtaiwan.com", "benson.cardtaiwan.com", "chunmei.cardtaiwan.com", "jerrywu.cardtaiwan.com", "www.linkedin.com", "linmu.cardtaiwan.com", "www.fezglass.com", "lin.ee", "reurl.cc", "movenpick.com.tw"];
+  var HOSTS = ["line.me", "instagram.com", "facebook.com", "google.com", "goo.gl", "www.instagram.com", "www.facebook.com", "www.movenpick.com.tw", "liff.line.me", "movenpick.cardtaiwan.com", "benson.cardtaiwan.com", "chunmei.cardtaiwan.com", "jerrywu.cardtaiwan.com", "linmu.cardtaiwan.com", "www.fezglass.com", "www.linkedin.com", "lin.ee", "reurl.cc", "movenpick.com.tw"];
   function hostOk(dest){
     var u = new URL(dest);
     if(/^(tel|mailto):$/.test(u.protocol)) return true;
@@ -444,6 +444,19 @@
     catch(x){ return ''; }
   }
 
+  // 匿名裝置碼：LIFF 拿不到 LINE 身分時，靠它讓「同一個裝置」仍可被去重
+  // （只存在瀏覽器本機，不含任何個資；與名片頁頁尾的裝置碼是兩套，因為網域不同）
+  function deviceId(){
+    try{
+      var d = localStorage.getItem('relayDid') || '';
+      if(!d){
+        d = 'a' + Date.now().toString(36) + Math.random().toString(36).slice(2, 10);
+        localStorage.setItem('relayDid', d);
+      }
+      return d;
+    }catch(e){ return ''; }
+  }
+
   // why = 「為什麼沒有 uid」的短代碼；正常拿到 uid 時為空字串。
   // name / pic 只在 getProfile 成功時才有，其餘情況一律空字串。
   function send(uid, why, prof){
@@ -454,7 +467,8 @@
                                ref:q.get('ref')||'',
                                err:why||'',
                                name:String(prof.displayName||'').slice(0, 100),
-                               pic:String(prof.pictureUrl||'').slice(0, 300)});
+                               pic:String(prof.pictureUrl||'').slice(0, 300),
+                               did:deviceId()});
     // 用 text/plain 避開 CORS preflight（Apps Script 不處理 OPTIONS）。
     // 送出後「立刻」導向，不等回應。
     try{
